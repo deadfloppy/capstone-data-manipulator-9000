@@ -159,3 +159,50 @@ def create_matplotlib_figure(
     plt.close(fig)
 
     return buf.getvalue()
+
+
+def create_correlation_heatmap(
+    corr_matrix: pd.DataFrame,
+    labels: list[str] | None = None,
+) -> bytes:
+    """
+    Create a correlation matrix heatmap and return it as PNG bytes.
+
+    Args:
+        corr_matrix: Correlation matrix DataFrame
+        labels: Optional list of labels for axes
+
+    Returns:
+        PNG image as bytes
+    """
+    fig, ax = plt.subplots(figsize=(10, 8))
+
+    im = ax.imshow(corr_matrix.values, cmap='RdBu_r', vmin=-1, vmax=1, aspect='auto')
+
+    # Add colorbar
+    cbar = ax.figure.colorbar(im, ax=ax)
+    cbar.ax.set_ylabel("Correlation", rotation=-90, va="bottom")
+
+    # Set ticks and labels
+    tick_labels = labels if labels else corr_matrix.columns.tolist()
+    ax.set_xticks(range(len(tick_labels)))
+    ax.set_yticks(range(len(tick_labels)))
+    ax.set_xticklabels(tick_labels, rotation=45, ha='right')
+    ax.set_yticklabels(tick_labels)
+
+    # Add correlation values as text
+    for i in range(len(corr_matrix)):
+        for j in range(len(corr_matrix)):
+            val = corr_matrix.iloc[i, j]
+            color = "white" if abs(val) > 0.5 else "black"
+            ax.text(j, i, f"{val:.2f}", ha="center", va="center", color=color, fontsize=8)
+
+    ax.set_title("Correlation Matrix")
+    plt.tight_layout()
+
+    buf = io.BytesIO()
+    fig.savefig(buf, format='png', dpi=150)
+    buf.seek(0)
+    plt.close(fig)
+
+    return buf.getvalue()

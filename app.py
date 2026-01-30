@@ -11,6 +11,7 @@ from utils import (
     get_categorical_columns,
     get_column_info,
     create_matplotlib_figure,
+    create_correlation_heatmap,
 )
 
 st.set_page_config(
@@ -118,42 +119,73 @@ if uploaded_file is not None:
 
     chart_type = st.sidebar.selectbox(
         "Chart Type",
-        ["Scatter", "Line", "Bar (frequency)"],
+        ["Scatter", "Line", "Bar (frequency)", "Correlation Matrix"],
     )
 
-    x_col = st.sidebar.selectbox(
-        "X Axis" if chart_type != "Bar (frequency)" else "Variable",
-        all_cols,
-        index=0,
-        format_func=format_var_label,
-        help=get_var_description(all_cols[0]) if all_cols else None,
-    )
-    if x_col:
-        st.sidebar.caption(f"*{get_var_description(x_col)}*")
-
-    # Y axis only for non-frequency charts
+    # Variable selection depends on chart type
+    x_col = None
     y_col = None
-    if chart_type != "Bar (frequency)":
-        y_col = st.sidebar.selectbox(
-            "Y Axis",
-            all_cols,
-            index=min(1, len(all_cols) - 1),
+    color_col = None
+    corr_cols = None
+
+    if chart_type == "Correlation Matrix":
+        # Multi-select for correlation matrix
+        default_numeric = numeric_cols[:10] if len(numeric_cols) > 10 else numeric_cols
+        corr_cols = st.sidebar.multiselect(
+            "Variables (numeric only)",
+            numeric_cols,
+            default=default_numeric,
             format_func=format_var_label,
         )
-        if y_col:
-            st.sidebar.caption(f"*{get_var_description(y_col)}*")
+        if len(corr_cols) < 2:
+            st.sidebar.warning("Select at least 2 variables")
+    else:
+        x_col = st.sidebar.selectbox(
+            "X Axis" if chart_type != "Bar (frequency)" else "Variable",
+            all_cols,
+            index=0,
+            format_func=format_var_label,
+            help=get_var_description(all_cols[0]) if all_cols else None,
+        )
+        if x_col:
+            st.sidebar.caption(f"*{get_var_description(x_col)}*")
 
-    # Color by (optional)
-    color_options = ["None"] + all_cols
-    color_col = st.sidebar.selectbox(
-        "Color By",
-        color_options,
-        index=0,
-        format_func=lambda x: format_var_label(x) if x != "None" else "None",
-    )
-    color_col = None if color_col == "None" else color_col
-    if color_col:
-        st.sidebar.caption(f"*{get_var_description(color_col)}*")
+        # Y axis only for non-frequency charts
+        if chart_type not in ["Bar (frequency)"]:
+            y_col = st.sidebar.selectbox(
+                "Y Axis",
+                all_cols,
+                index=min(1, len(all_cols) - 1),
+                format_func=format_var_label,
+            )
+            if y_col:
+                st.sidebar.caption(f"*{get_var_description(y_col)}*")
+
+        # Color by (optional)
+        color_options = ["None"] + all_cols
+        color_col = st.sidebar.selectbox(
+            "Color By",
+            color_options,
+            index=0,
+            format_func=lambda x: format_var_label(x) if x != "None" else "None",
+        )
+        color_col = None if color_col == "None" else color_col
+        if color_col:
+            st.sidebar.caption(f"*{get_var_description(color_col)}*")
+
+    # Filter to single X value
+    x_filter_value = None
+    if chart_type not in ["Correlation Matrix", "Bar (frequency)"] and x_col:
+        with st.sidebar.expander("Filter by X Value"):
+            enable_x_filter = st.checkbox("Filter to single X value", value=False)
+            if enable_x_filter:
+                unique_x = sorted(df[x_col].dropna().unique().tolist())
+                if len(unique_x) > 0:
+                    x_filter_value = st.selectbox(
+                        f"Select {x_col} value",
+                        unique_x,
+                        format_func=lambda v: str(v),
+                    )
 
     # Axis range controls
     with st.sidebar.expander("Axis Ranges"):
@@ -181,20 +213,26 @@ if uploaded_file is not None:
     plot_df = df
     was_sampled = False
     bar_truncated = False
+    x_filtered = False
     # For frequency charts, ignore color if same as x_col
-    freq_color = color_col if color_col != x_col else None
+    freq_color = color_col if color_col and color_col != x_col else None
+
+    # Apply X value filter
+    if x_filter_value is not None and x_col:
+        plot_df = df[df[x_col] == x_filter_value]
+        x_filtered = True
 
     # Sample for scatter/line if needed
-    if chart_type in ["Scatter", "Line"] and len(df) > 50000:
+    if chart_type in ["Scatter", "Line"] and len(plot_df) > 50000:
         plot_df, was_sampled = sample_data(df, max_points=50000)
 
     # Frequency bar chart - count occurrences
     if chart_type == "Bar (frequency)":
         if freq_color is None:
-            plot_df = df[x_col].value_counts().reset_index()
+            plot_df = plot_df[x_col].value_counts().reset_index()
             plot_df.columns = [x_col, "Frequency"]
         else:
-            plot_df = df.groupby([x_col, freq_color]).size().reset_index(name="Frequency")
+            plot_df = plot_df.groupby([x_col, freq_color]).size().reset_index(name="Frequency")
 
         max_bars = 50
         if plot_df[x_col].nunique() > max_bars:
@@ -202,70 +240,101 @@ if uploaded_file is not None:
             plot_df = plot_df[plot_df[x_col].isin(top_categories)]
             bar_truncated = True
 
+    if x_filtered:
+        st.info(f"Filtered to {x_col} = {x_filter_value} ({len(plot_df):,} rows)")
     if was_sampled:
         st.warning(f"Data sampled to 50,000 points for performance (original: {len(df):,} rows)")
     if bar_truncated:
         st.warning(f"Showing top 50 categories by frequency")
 
     # Create chart
-    x_label = get_var_description(x_col)
-    y_label = get_var_description(y_col) if y_col else "Frequency"
-
     try:
-        if chart_type == "Scatter":
-            fig = px.scatter(
-                plot_df,
-                x=x_col,
-                y=y_col,
-                color=color_col,
-                title=f"{y_label} vs {x_label}",
-                labels={x_col: x_label, y_col: y_label},
-            )
-        elif chart_type == "Line":
-            fig = px.line(
-                plot_df.sort_values(x_col),
-                x=x_col,
-                y=y_col,
-                color=color_col,
-                title=f"{y_label} vs {x_label}",
-                labels={x_col: x_label, y_col: y_label},
-            )
-        else:  # Bar (frequency)
-            fig = px.bar(
-                plot_df,
-                x=x_col,
-                y="Frequency",
-                color=freq_color,
-                title=f"Frequency of {x_label}",
-                labels={x_col: x_label, "Frequency": "Frequency"},
-            )
+        if chart_type == "Correlation Matrix":
+            if corr_cols and len(corr_cols) >= 2:
+                corr_matrix = df[corr_cols].corr()
+                # Create labels with descriptions
+                corr_labels = [get_var_description(c) for c in corr_cols]
+                fig = px.imshow(
+                    corr_matrix,
+                    x=corr_labels,
+                    y=corr_labels,
+                    color_continuous_scale="RdBu_r",
+                    zmin=-1,
+                    zmax=1,
+                    title="Correlation Matrix",
+                    text_auto=".2f",
+                )
+                fig.update_layout(height=600)
+                st.plotly_chart(fig, use_container_width=True)
 
-        fig.update_layout(height=500)
-        if x_range:
-            fig.update_xaxes(range=x_range)
-        if y_range:
-            fig.update_yaxes(range=y_range)
-        st.plotly_chart(fig, use_container_width=True)
+                # Export button for correlation matrix
+                png_bytes = create_correlation_heatmap(corr_matrix, corr_labels)
+                st.download_button(
+                    label="Export as PNG (Matplotlib)",
+                    data=png_bytes,
+                    file_name="correlation_matrix.png",
+                    mime="image/png",
+                )
+            else:
+                st.info("Select at least 2 numeric variables to show correlation matrix.")
+        else:
+            x_label = get_var_description(x_col) if x_col else ""
+            y_label = get_var_description(y_col) if y_col else "Frequency"
 
-        # Export button
-        export_color = freq_color if chart_type == "Bar (frequency)" else color_col
-        png_bytes = create_matplotlib_figure(
-            plot_df,
-            chart_type,
-            x_col,
-            y_col if y_col else "Frequency",
-            export_color,
-            x_label=x_label,
-            y_label=y_label,
-            x_range=x_range,
-            y_range=y_range,
-        )
-        st.download_button(
-            label="Export as PNG (Matplotlib)",
-            data=png_bytes,
-            file_name=f"{chart_type.lower().replace(' ', '_')}_{x_col}.png",
-            mime="image/png",
-        )
+            if chart_type == "Scatter":
+                fig = px.scatter(
+                    plot_df,
+                    x=x_col,
+                    y=y_col,
+                    color=color_col,
+                    title=f"{y_label} vs {x_label}",
+                    labels={x_col: x_label, y_col: y_label},
+                )
+            elif chart_type == "Line":
+                fig = px.line(
+                    plot_df.sort_values(x_col),
+                    x=x_col,
+                    y=y_col,
+                    color=color_col,
+                    title=f"{y_label} vs {x_label}",
+                    labels={x_col: x_label, y_col: y_label},
+                )
+            else:  # Bar (frequency)
+                fig = px.bar(
+                    plot_df,
+                    x=x_col,
+                    y="Frequency",
+                    color=freq_color,
+                    title=f"Frequency of {x_label}",
+                    labels={x_col: x_label, "Frequency": "Frequency"},
+                )
+
+            fig.update_layout(height=500)
+            if x_range:
+                fig.update_xaxes(range=x_range)
+            if y_range:
+                fig.update_yaxes(range=y_range)
+            st.plotly_chart(fig, use_container_width=True)
+
+            # Export button
+            export_color = freq_color if chart_type == "Bar (frequency)" else color_col
+            png_bytes = create_matplotlib_figure(
+                plot_df,
+                chart_type,
+                x_col,
+                y_col if y_col else "Frequency",
+                export_color,
+                x_label=x_label,
+                y_label=y_label,
+                x_range=x_range,
+                y_range=y_range,
+            )
+            st.download_button(
+                label="Export as PNG (Matplotlib)",
+                data=png_bytes,
+                file_name=f"{chart_type.lower().replace(' ', '_')}_{x_col}.png",
+                mime="image/png",
+            )
 
     except Exception as e:
         st.error(f"Could not create chart: {e}")
