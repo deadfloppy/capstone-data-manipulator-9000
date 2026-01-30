@@ -98,7 +98,7 @@ if uploaded_file is not None:
     col3.metric("Memory", f"{df.memory_usage(deep=True).sum() / 1024 / 1024:.1f} MB")
 
     # Tabs for preview and info
-    tab1, tab2, tab3 = st.tabs(["Preview", "Column Info", "Statistics"])
+    tab1, tab2, tab3, tab4 = st.tabs(["Preview", "Column Info", "Statistics", "Encode Variables"])
 
     with tab1:
         n_rows = st.slider("Rows to display", 5, 100, 10)
@@ -110,9 +110,102 @@ if uploaded_file is not None:
     with tab3:
         st.dataframe(df.describe(), use_container_width=True)
 
+    with tab4:
+        st.caption("Convert categorical columns to numerical values for analysis")
+
+        # Get categorical and boolean columns
+        cat_cols = df.select_dtypes(include=['object', 'category', 'bool']).columns.tolist()
+
+        if cat_cols:
+            encode_tab1, encode_tab2 = st.tabs(["One-Hot Encoding", "Label Encoding"])
+
+            with encode_tab1:
+                st.markdown("**One-Hot Encoding**: Each unique value becomes a new binary (0/1) column")
+                onehot_cols = st.multiselect(
+                    "Select columns to one-hot encode",
+                    cat_cols,
+                    key="onehot_cols",
+                )
+
+                if onehot_cols:
+                    for col in onehot_cols:
+                        unique_vals = df[col].dropna().unique()
+                        st.caption(f"**{col}**: {len(unique_vals)} values → creates {len(unique_vals)} new columns")
+
+                    if st.button("Apply One-Hot Encoding", type="primary", key="apply_onehot"):
+                        encoded_df = pd.get_dummies(df, columns=onehot_cols, prefix=onehot_cols, dtype=int)
+                        st.session_state.df = encoded_df
+                        prev_encoded = st.session_state.get("encoded_cols") or []
+                        st.session_state.encoded_cols = prev_encoded + onehot_cols
+                        st.success(f"Encoded {len(onehot_cols)} column(s). New columns: {len(encoded_df.columns) - len(df.columns)}")
+                        st.rerun()
+
+            with encode_tab2:
+                st.markdown("**Label Encoding**: Convert categories to numbers (0, 1, 2, ...)")
+                label_col = st.selectbox(
+                    "Select column to label encode",
+                    [""] + cat_cols,
+                    key="label_col",
+                )
+
+                if label_col:
+                    unique_vals = df[label_col].dropna().unique().tolist()
+                    st.caption(f"**{len(unique_vals)} unique values found**")
+
+                    # Option for custom ordering
+                    use_custom_order = st.checkbox(
+                        "Specify custom order (for ordinal data like low/medium/high)",
+                        key="custom_order",
+                    )
+
+                    if use_custom_order:
+                        st.caption("Drag to reorder, or enter comma-separated values:")
+                        default_order = ", ".join(str(v) for v in unique_vals)
+                        custom_order_str = st.text_input(
+                            "Order (first = 0, second = 1, ...)",
+                            value=default_order,
+                            key="order_input",
+                        )
+                        try:
+                            ordered_vals = [v.strip() for v in custom_order_str.split(",")]
+                            # Show preview
+                            st.caption("Preview: " + ", ".join(f"{v}={i}" for i, v in enumerate(ordered_vals)))
+                        except:
+                            ordered_vals = unique_vals
+                    else:
+                        ordered_vals = sorted(unique_vals, key=str)
+                        st.caption("Alphabetical order: " + ", ".join(f"{v}={i}" for i, v in enumerate(ordered_vals)))
+
+                    new_col_name = st.text_input(
+                        "New column name",
+                        value=f"{label_col}_encoded",
+                        key="new_col_name",
+                    )
+
+                    if st.button("Apply Label Encoding", type="primary", key="apply_label"):
+                        value_map = {v: i for i, v in enumerate(ordered_vals)}
+                        df[new_col_name] = df[label_col].map(value_map)
+                        st.session_state.df = df
+                        prev_encoded = st.session_state.get("encoded_cols") or []
+                        st.session_state.encoded_cols = prev_encoded + [new_col_name]
+                        st.success(f"Created column '{new_col_name}' with values 0-{len(ordered_vals)-1}")
+                        st.rerun()
+
+            # Show reset option if any encoding was applied
+            if st.session_state.get("encoded_cols"):
+                st.divider()
+                st.caption(f"Encoded columns: {', '.join(st.session_state.encoded_cols)}")
+                if st.button("Reset to Original Data", key="reset_encoding"):
+                    st.session_state.df = load_csv(uploaded_file)
+                    st.session_state.encoded_cols = None
+                    st.rerun()
+        else:
+            st.info("No categorical or boolean columns found to encode.")
+
     # Chart configuration in sidebar
     st.sidebar.header("Chart Configuration")
 
+    # Refresh column lists after potential encoding
     numeric_cols = get_numeric_columns(df)
     categorical_cols = get_categorical_columns(df)
     all_cols = df.columns.tolist()
@@ -305,8 +398,12 @@ if uploaded_file is not None:
                     x=x_col,
                     y="Frequency",
                     color=freq_color,
-                    title=f"Frequency of {x_label}",
-                    labels={x_col: x_label, "Frequency": "Frequency"},
+                    title=f"Frequency of {x_label}" + (f" by {get_var_description(freq_color)}" if freq_color else ""),
+                    labels={x_col: x_label, "Frequency": "Count"},
+                    barmode="stack",
+                )
+                fig.update_traces(
+                    hovertemplate=f"<b>{x_label}</b>: %{{x}}<br><b>Count</b>: %{{y:,}}<extra>%{{fullData.name}}</extra>"
                 )
 
             fig.update_layout(height=500)
@@ -315,6 +412,20 @@ if uploaded_file is not None:
             if y_range:
                 fig.update_yaxes(range=y_range)
             st.plotly_chart(fig, use_container_width=True)
+
+            # Show frequency breakdown table for bar charts with color
+            if chart_type == "Bar (frequency)" and freq_color:
+                with st.expander("Frequency Breakdown Table", expanded=False):
+                    pivot_table = plot_df.pivot_table(
+                        index=x_col,
+                        columns=freq_color,
+                        values="Frequency",
+                        aggfunc="sum",
+                        fill_value=0,
+                    )
+                    pivot_table["Total"] = pivot_table.sum(axis=1)
+                    pivot_table.loc["Total"] = pivot_table.sum()
+                    st.dataframe(pivot_table, use_container_width=True)
 
             # Export button
             export_color = freq_color if chart_type == "Bar (frequency)" else color_col
