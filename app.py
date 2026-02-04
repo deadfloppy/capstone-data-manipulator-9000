@@ -102,7 +102,13 @@ if uploaded_file is not None:
 
     with tab1:
         n_rows = st.slider("Rows to display", 5, 100, 10)
-        st.dataframe(df.head(n_rows), use_container_width=True)
+        # Build column config with tooltips from variable descriptions
+        col_config = {}
+        for col in df.columns:
+            desc = var_descriptions.get(col)
+            if desc:
+                col_config[col] = st.column_config.Column(help=desc)
+        st.dataframe(df.head(n_rows), column_config=col_config, use_container_width=True)
 
     with tab2:
         st.dataframe(get_column_info(df), use_container_width=True)
