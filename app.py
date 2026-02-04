@@ -30,7 +30,7 @@ with col_data:
         "Upload a CSV file",
         type=["csv"],
         help="Drag and drop or click to browse",
-        max_upload_size=500,  # 500 MB
+        max_upload_size=1000,
     )
 
 with col_dict:
