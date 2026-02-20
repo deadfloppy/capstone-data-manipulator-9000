@@ -4,14 +4,18 @@ import io
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+import streamlit as st
 
 
-def load_csv(file) -> pd.DataFrame:
+@st.cache_data
+def load_csv(_file, file_name: str, file_size: int) -> pd.DataFrame:
     """
     Load a CSV file with automatic encoding and delimiter detection.
 
     Args:
-        file: File-like object from Streamlit uploader
+        _file: File-like object from Streamlit uploader (unhashable, excluded from cache key)
+        file_name: Name of the file (used as cache key)
+        file_size: Size of the file in bytes (used as cache key)
 
     Returns:
         pandas DataFrame
@@ -20,23 +24,23 @@ def load_csv(file) -> pd.DataFrame:
 
     for encoding in encodings:
         try:
-            file.seek(0)
-            df = pd.read_csv(file, encoding=encoding)
+            _file.seek(0)
+            df = pd.read_csv(_file, encoding=encoding)
             return df
         except UnicodeDecodeError:
             continue
         except Exception as e:
             # Try with different delimiter if comma fails
             try:
-                file.seek(0)
-                df = pd.read_csv(file, encoding=encoding, sep=';')
+                _file.seek(0)
+                df = pd.read_csv(_file, encoding=encoding, sep=';')
                 return df
             except:
                 continue
 
     # Final fallback
-    file.seek(0)
-    return pd.read_csv(file, encoding='latin-1', on_bad_lines='skip')
+    _file.seek(0)
+    return pd.read_csv(_file, encoding='latin-1', on_bad_lines='skip')
 
 
 def sample_data(df: pd.DataFrame, max_points: int = 50000) -> tuple[pd.DataFrame, bool]:
@@ -66,6 +70,7 @@ def get_categorical_columns(df: pd.DataFrame) -> list[str]:
     return df.select_dtypes(include=['object', 'category']).columns.tolist()
 
 
+@st.cache_data
 def get_column_info(df: pd.DataFrame) -> pd.DataFrame:
     """
     Generate summary info about DataFrame columns.

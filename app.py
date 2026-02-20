@@ -15,9 +15,23 @@ from utils import (
 )
 
 
+@st.cache_data
+def cached_describe(df):
+    return df.describe()
+
+
+@st.cache_data
+def cached_type_info(df):
+    return pd.DataFrame({
+        "Column": df.columns,
+        "Current Type": [str(df[c].dtype) for c in df.columns],
+        "Sample Value": [str(df[c].dropna().iloc[0]) if df[c].notna().any() else "N/A" for c in df.columns],
+    })
+
+
 st.set_page_config(
     page_title="CSV Data Analysis",
-    page_icon="📊",
+    page_icon="\U0001f4ca",
     layout="wide",
 )
 
@@ -84,7 +98,7 @@ if not has_data:
                 shared_selected = sorted(set(selected_1) & set(selected_2))
                 if shared_selected:
                     merge_keys = st.multiselect(
-                        "Key columns (must appear in both selections — rows are matched on these)",
+                        "Key columns (must appear in both selections \u2014 rows are matched on these)",
                         shared_selected,
                         help="Rows where all key values match will be combined",
                     )
@@ -101,8 +115,8 @@ if not has_data:
 
                         if st.button("Merge datasets", type="primary"):
                             with st.spinner("Merging datasets..."):
-                                df1 = load_csv(merge_file_1)[selected_1]
-                                df2 = load_csv(merge_file_2)[selected_2]
+                                df1 = load_csv(merge_file_1, merge_file_1.name, merge_file_1.size)[selected_1]
+                                df2 = load_csv(merge_file_2, merge_file_2.name, merge_file_2.size)[selected_2]
                                 for k in merge_keys:
                                     df1[k] = df1[k].astype(str)
                                     df2[k] = df2[k].astype(str)
@@ -112,15 +126,14 @@ if not has_data:
                                 st.session_state.restored_from_file = False
                                 st.rerun()
                 else:
-                    st.warning("No shared columns between your selections — select at least one common column to use as a merge key.")
+                    st.warning("No shared columns between your selections \u2014 select at least one common column to use as a merge key.")
 
 with st.sidebar:
     if "df" in st.session_state:
-        csv_bytes = st.session_state.df.to_csv(index=False).encode("utf-8")
         dl_name = st.session_state.get("filename", "data.csv")
         st.download_button(
             label="Download dataset",
-            data=csv_bytes,
+            data=lambda: st.session_state.df.to_csv(index=False).encode("utf-8"),
             file_name=dl_name,
             mime="text/csv",
             key="download_dataset",
@@ -135,7 +148,7 @@ with st.sidebar:
 var_descriptions = {}
 if dict_file is not None:
     if "dict_df" not in st.session_state or st.session_state.get("dict_filename") != dict_file.name:
-        st.session_state.dict_df = load_csv(dict_file)
+        st.session_state.dict_df = load_csv(dict_file, dict_file.name, dict_file.size)
         st.session_state.dict_filename = dict_file.name
 
     dict_df = st.session_state.dict_df
@@ -185,7 +198,7 @@ if uploaded_file is not None:
         and not st.session_state.get("data_modified")
     ):
         with st.spinner("Loading data..."):
-            st.session_state.df = load_csv(uploaded_file)
+            st.session_state.df = load_csv(uploaded_file, uploaded_file.name, uploaded_file.size)
             st.session_state.filename = uploaded_file.name
             st.session_state.restored_from_file = False
             st.session_state.data_modified = False
@@ -202,319 +215,319 @@ if has_data and "df" in st.session_state:
     col2.metric("Columns", len(df.columns))
     col3.metric("Memory", f"{df.memory_usage(deep=True).sum() / 1024 / 1024:.1f} MB")
 
-    # Tabs for preview and info
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(["Preview", "Column Info", "Statistics", "Encode Variables", "Create Derivative", "Merge with Dataset", "Manipulate"])
+    # Data tabs fragment — switching tabs only reruns this section
+    @st.fragment
+    def data_tabs_fragment():
+        df = st.session_state.df
 
-    with tab1:
-        n_rows = st.slider("Rows to display", 5, 100, 10)
-        # Build column config with tooltips from variable descriptions
-        col_config = {}
-        for col in df.columns:
-            desc = var_descriptions.get(col)
-            if desc:
-                col_config[col] = st.column_config.Column(help=desc)
-        st.dataframe(df.head(n_rows), column_config=col_config, use_container_width=True)
+        tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(["Preview", "Column Info", "Statistics", "Encode Variables", "Create Derivative", "Merge with Dataset", "Manipulate"])
 
-    with tab2:
-        st.dataframe(get_column_info(df), use_container_width=True)
+        with tab1:
+            n_rows = st.slider("Rows to display", 5, 100, 10)
+            # Build column config with tooltips from variable descriptions
+            col_config = {}
+            for col in df.columns:
+                desc = var_descriptions.get(col)
+                if desc:
+                    col_config[col] = st.column_config.Column(help=desc)
+            st.dataframe(df.head(n_rows), column_config=col_config, use_container_width=True)
 
-    with tab3:
-        st.dataframe(df.describe(), use_container_width=True)
+        with tab2:
+            st.dataframe(get_column_info(df), use_container_width=True)
 
-    with tab4:
-        st.caption("Convert categorical columns to numerical values for analysis")
+        with tab3:
+            st.dataframe(cached_describe(df), use_container_width=True)
 
-        # Get categorical and boolean columns
-        cat_cols = df.select_dtypes(include=['object', 'category', 'bool']).columns.tolist()
+        with tab4:
+            st.caption("Convert categorical columns to numerical values for analysis")
 
-        if cat_cols:
-            encode_tab1, encode_tab2 = st.tabs(["One-Hot Encoding", "Label Encoding"])
+            # Get categorical and boolean columns
+            cat_cols = df.select_dtypes(include=['object', 'category', 'bool']).columns.tolist()
 
-            with encode_tab1:
-                st.markdown("**One-Hot Encoding**: Each unique value becomes a new binary (0/1) column")
-                onehot_cols = st.multiselect(
-                    "Select columns to one-hot encode",
-                    cat_cols,
-                    key="onehot_cols",
-                )
+            if cat_cols:
+                encode_tab1, encode_tab2 = st.tabs(["One-Hot Encoding", "Label Encoding"])
 
-                if onehot_cols:
-                    for col in onehot_cols:
-                        unique_vals = df[col].dropna().unique()
-                        st.caption(f"**{col}**: {len(unique_vals)} values → creates {len(unique_vals)} new columns")
-
-                    if st.button("Apply One-Hot Encoding", type="primary", key="apply_onehot"):
-                        encoded_df = pd.get_dummies(df, columns=onehot_cols, prefix=onehot_cols, dtype=int)
-                        st.session_state.df = encoded_df
-                        prev_encoded = st.session_state.get("encoded_cols") or []
-                        st.session_state.encoded_cols = prev_encoded + onehot_cols
-                        st.success(f"Encoded {len(onehot_cols)} column(s). New columns: {len(encoded_df.columns) - len(df.columns)}")
-                        st.rerun()
-
-            with encode_tab2:
-                st.markdown("**Label Encoding**: Convert categories to numbers (0, 1, 2, ...)")
-                label_col = st.selectbox(
-                    "Select column to label encode",
-                    [""] + cat_cols,
-                    key="label_col",
-                )
-
-                if label_col:
-                    unique_vals = df[label_col].dropna().unique().tolist()
-                    st.caption(f"**{len(unique_vals)} unique values found**")
-
-                    # Option for custom ordering
-                    use_custom_order = st.checkbox(
-                        "Specify custom order (for ordinal data like low/medium/high)",
-                        key="custom_order",
+                with encode_tab1:
+                    st.markdown("**One-Hot Encoding**: Each unique value becomes a new binary (0/1) column")
+                    onehot_cols = st.multiselect(
+                        "Select columns to one-hot encode",
+                        cat_cols,
+                        key="onehot_cols",
                     )
 
-                    if use_custom_order:
-                        st.caption("Drag to reorder, or enter comma-separated values:")
-                        default_order = ", ".join(str(v) for v in unique_vals)
-                        custom_order_str = st.text_input(
-                            "Order (first = 0, second = 1, ...)",
-                            value=default_order,
-                            key="order_input",
+                    if onehot_cols:
+                        for col in onehot_cols:
+                            unique_vals = df[col].dropna().unique()
+                            st.caption(f"**{col}**: {len(unique_vals)} values \u2192 creates {len(unique_vals)} new columns")
+
+                        if st.button("Apply One-Hot Encoding", type="primary", key="apply_onehot"):
+                            encoded_df = pd.get_dummies(df, columns=onehot_cols, prefix=onehot_cols, dtype=int)
+                            st.session_state.df = encoded_df
+                            prev_encoded = st.session_state.get("encoded_cols") or []
+                            st.session_state.encoded_cols = prev_encoded + onehot_cols
+                            st.success(f"Encoded {len(onehot_cols)} column(s). New columns: {len(encoded_df.columns) - len(df.columns)}")
+                            st.rerun(scope="app")
+
+                with encode_tab2:
+                    st.markdown("**Label Encoding**: Convert categories to numbers (0, 1, 2, ...)")
+                    label_col = st.selectbox(
+                        "Select column to label encode",
+                        [""] + cat_cols,
+                        key="label_col",
+                    )
+
+                    if label_col:
+                        unique_vals = df[label_col].dropna().unique().tolist()
+                        st.caption(f"**{len(unique_vals)} unique values found**")
+
+                        # Option for custom ordering
+                        use_custom_order = st.checkbox(
+                            "Specify custom order (for ordinal data like low/medium/high)",
+                            key="custom_order",
                         )
-                        try:
-                            ordered_vals = [v.strip() for v in custom_order_str.split(",")]
-                            # Show preview
-                            st.caption("Preview: " + ", ".join(f"{v}={i}" for i, v in enumerate(ordered_vals)))
-                        except:
-                            ordered_vals = unique_vals
+
+                        if use_custom_order:
+                            st.caption("Drag to reorder, or enter comma-separated values:")
+                            default_order = ", ".join(str(v) for v in unique_vals)
+                            custom_order_str = st.text_input(
+                                "Order (first = 0, second = 1, ...)",
+                                value=default_order,
+                                key="order_input",
+                            )
+                            try:
+                                ordered_vals = [v.strip() for v in custom_order_str.split(",")]
+                                # Show preview
+                                st.caption("Preview: " + ", ".join(f"{v}={i}" for i, v in enumerate(ordered_vals)))
+                            except:
+                                ordered_vals = unique_vals
+                        else:
+                            ordered_vals = sorted(unique_vals, key=str)
+                            st.caption("Alphabetical order: " + ", ".join(f"{v}={i}" for i, v in enumerate(ordered_vals)))
+
+                        new_col_name = st.text_input(
+                            "New column name",
+                            value=f"{label_col}_encoded",
+                            key="new_col_name",
+                        )
+
+                        if st.button("Apply Label Encoding", type="primary", key="apply_label"):
+                            value_map = {v: i for i, v in enumerate(ordered_vals)}
+                            df[new_col_name] = df[label_col].map(value_map)
+                            st.session_state.df = df
+                            prev_encoded = st.session_state.get("encoded_cols") or []
+                            st.session_state.encoded_cols = prev_encoded + [new_col_name]
+                            st.success(f"Created column '{new_col_name}' with values 0-{len(ordered_vals)-1}")
+                            st.rerun(scope="app")
+
+                # Show reset option if any encoding was applied
+                if st.session_state.get("encoded_cols"):
+                    st.divider()
+                    st.caption(f"Encoded columns: {', '.join(st.session_state.encoded_cols)}")
+                    if uploaded_file is not None:
+                        if st.button("Reset to Original Data", key="reset_encoding"):
+                            st.session_state.df = load_csv(uploaded_file, uploaded_file.name, uploaded_file.size)
+                            st.session_state.encoded_cols = None
+                            st.rerun(scope="app")
                     else:
-                        ordered_vals = sorted(unique_vals, key=str)
-                        st.caption("Alphabetical order: " + ", ".join(f"{v}={i}" for i, v in enumerate(ordered_vals)))
+                        st.caption("(Reset unavailable for restored sessions)")
+            else:
+                st.info("No categorical or boolean columns found to encode.")
 
-                    new_col_name = st.text_input(
-                        "New column name",
-                        value=f"{label_col}_encoded",
-                        key="new_col_name",
-                    )
+        with tab5:
+            st.caption("Create a new dataset with selected columns from the current data")
 
-                    if st.button("Apply Label Encoding", type="primary", key="apply_label"):
-                        value_map = {v: i for i, v in enumerate(ordered_vals)}
-                        df[new_col_name] = df[label_col].map(value_map)
-                        st.session_state.df = df
-                        prev_encoded = st.session_state.get("encoded_cols") or []
-                        st.session_state.encoded_cols = prev_encoded + [new_col_name]
-                        st.success(f"Created column '{new_col_name}' with values 0-{len(ordered_vals)-1}")
-                        st.rerun()
+            all_columns = df.columns.tolist()
 
-            # Show reset option if any encoding was applied
-            if st.session_state.get("encoded_cols"):
-                st.divider()
-                st.caption(f"Encoded columns: {', '.join(st.session_state.encoded_cols)}")
-                if uploaded_file is not None:
-                    if st.button("Reset to Original Data", key="reset_encoding"):
-                        st.session_state.df = load_csv(uploaded_file)
+            # Initialize preview columns
+            if "derivative_preview_cols" not in st.session_state:
+                st.session_state.derivative_preview_cols = all_columns
+
+            # Form prevents rerun until submitted
+            with st.form("derivative_form"):
+                valid_default = [c for c in st.session_state.derivative_preview_cols if c in all_columns]
+                if not valid_default:
+                    valid_default = all_columns
+
+                selected_cols = st.multiselect(
+                    "Select columns to include",
+                    all_columns,
+                    default=valid_default,
+                    help="Choose which columns to include in the derivative dataset",
+                )
+
+                submitted = st.form_submit_button("Update preview")
+                if submitted:
+                    st.session_state.derivative_preview_cols = selected_cols
+
+            # Use stored preview columns for display
+            preview_cols = [c for c in st.session_state.derivative_preview_cols if c in all_columns]
+
+            if preview_cols:
+                derivative_df = df[preview_cols]
+                st.caption(f"**Preview**: {len(derivative_df):,} rows \u00d7 {len(preview_cols)} columns")
+                st.dataframe(derivative_df.head(10), use_container_width=True)
+
+                col_use, col_download = st.columns(2)
+
+                with col_use:
+                    if st.button("Use as current dataset", type="primary", key="use_derivative"):
+                        st.session_state.df = derivative_df
                         st.session_state.encoded_cols = None
-                        st.rerun()
-                else:
-                    st.caption("(Reset unavailable for restored sessions)")
-        else:
-            st.info("No categorical or boolean columns found to encode.")
+                        st.success(f"Dataset updated to {len(preview_cols)} columns")
+                        st.rerun(scope="app")
 
-    with tab5:
-        st.caption("Create a new dataset with selected columns from the current data")
+                with col_download:
+                    base_name = st.session_state.get("filename", "data.csv").rsplit(".", 1)[0]
+                    st.download_button(
+                        label="Download as CSV",
+                        data=lambda: derivative_df.to_csv(index=False).encode("utf-8"),
+                        file_name=f"{base_name}_derivative.csv",
+                        mime="text/csv",
+                        key="download_derivative",
+                    )
+            else:
+                st.warning("Select at least one column")
 
-        all_columns = df.columns.tolist()
+        with tab6:
+            st.caption("Merge the current dataset with another CSV file")
 
-        # Initialize preview columns
-        if "derivative_preview_cols" not in st.session_state:
-            st.session_state.derivative_preview_cols = all_columns
+            merge_upload = st.file_uploader("Upload CSV to merge with", type=["csv"], key="merge_tab_file")
 
-        # Form prevents rerun until submitted
-        with st.form("derivative_form"):
-            valid_default = [c for c in st.session_state.derivative_preview_cols if c in all_columns]
-            if not valid_default:
-                valid_default = all_columns
+            if merge_upload is not None:
+                merge_headers = pd.read_csv(merge_upload, nrows=0).columns.tolist()
+                merge_upload.seek(0)
+                current_cols = df.columns.tolist()
 
-            selected_cols = st.multiselect(
-                "Select columns to include",
-                all_columns,
-                default=valid_default,
-                help="Choose which columns to include in the derivative dataset",
-            )
-
-            submitted = st.form_submit_button("Update preview")
-            if submitted:
-                st.session_state.derivative_preview_cols = selected_cols
-
-        # Use stored preview columns for display
-        preview_cols = [c for c in st.session_state.derivative_preview_cols if c in all_columns]
-
-        if preview_cols:
-            derivative_df = df[preview_cols]
-            st.caption(f"**Preview**: {len(derivative_df):,} rows × {len(preview_cols)} columns")
-            st.dataframe(derivative_df.head(10), use_container_width=True)
-
-            col_use, col_download = st.columns(2)
-
-            with col_use:
-                if st.button("Use as current dataset", type="primary", key="use_derivative"):
-                    st.session_state.df = derivative_df
-                    st.session_state.encoded_cols = None
-                    st.success(f"Dataset updated to {len(preview_cols)} columns")
-                    st.rerun()
-
-            with col_download:
-                csv_bytes = derivative_df.to_csv(index=False).encode("utf-8")
-                base_name = st.session_state.get("filename", "data.csv").rsplit(".", 1)[0]
-                st.download_button(
-                    label="Download as CSV",
-                    data=csv_bytes,
-                    file_name=f"{base_name}_derivative.csv",
-                    mime="text/csv",
-                    key="download_derivative",
-                )
-        else:
-            st.warning("Select at least one column")
-
-    with tab6:
-        st.caption("Merge the current dataset with another CSV file")
-
-        merge_upload = st.file_uploader("Upload CSV to merge with", type=["csv"], key="merge_tab_file")
-
-        if merge_upload is not None:
-            merge_headers = pd.read_csv(merge_upload, nrows=0).columns.tolist()
-            merge_upload.seek(0)
-            current_cols = df.columns.tolist()
-
-            # Select columns from current dataset
-            mcol1, mcol2 = st.columns(2)
-            with mcol1:
-                sel_current = st.multiselect(
-                    "Columns from current dataset",
-                    current_cols,
-                    default=current_cols,
-                    key="merge_tab_sel_current",
-                )
-            with mcol2:
-                sel_other = st.multiselect(
-                    "Columns from uploaded file",
-                    merge_headers,
-                    default=merge_headers,
-                    key="merge_tab_sel_other",
-                )
-
-            if sel_current and sel_other:
-                shared = sorted(set(sel_current) & set(sel_other))
-                if shared:
-                    tab_merge_keys = st.multiselect(
-                        "Key columns (must appear in both selections — rows are matched on these)",
-                        shared,
-                        key="merge_tab_keys",
+                # Select columns from current dataset
+                mcol1, mcol2 = st.columns(2)
+                with mcol1:
+                    sel_current = st.multiselect(
+                        "Columns from current dataset",
+                        current_cols,
+                        default=current_cols,
+                        key="merge_tab_sel_current",
+                    )
+                with mcol2:
+                    sel_other = st.multiselect(
+                        "Columns from uploaded file",
+                        merge_headers,
+                        default=merge_headers,
+                        key="merge_tab_sel_other",
                     )
 
-                    if tab_merge_keys:
-                        extra_cur = [c for c in sel_current if c not in tab_merge_keys]
-                        extra_oth = [c for c in sel_other if c not in tab_merge_keys]
-                        st.caption(
-                            f"Result will have: **{', '.join(tab_merge_keys)}** (keys)"
-                            + (f" + **{', '.join(extra_cur)}** (current)" if extra_cur else "")
-                            + (f" + **{', '.join(extra_oth)}** (uploaded)" if extra_oth else "")
+                if sel_current and sel_other:
+                    shared = sorted(set(sel_current) & set(sel_other))
+                    if shared:
+                        tab_merge_keys = st.multiselect(
+                            "Key columns (must appear in both selections \u2014 rows are matched on these)",
+                            shared,
+                            key="merge_tab_keys",
                         )
 
-                        if st.button("Merge datasets", type="primary", key="merge_tab_btn"):
-                            with st.spinner("Merging datasets..."):
-                                df_current = df[sel_current].copy()
-                                df_other = load_csv(merge_upload)[sel_other]
-                                for k in tab_merge_keys:
-                                    df_current[k] = df_current[k].astype(str)
-                                    df_other[k] = df_other[k].astype(str)
-                                merged = pd.merge(df_current, df_other, on=tab_merge_keys, how="inner")
-                                st.session_state.df = merged
-                                st.session_state.filename = "merged_dataset.csv"
-                                st.session_state.encoded_cols = None
-                                st.session_state.data_modified = True
-                                st.rerun()
-                else:
-                    st.warning("No shared columns between your selections — select at least one common column to use as a merge key.")
+                        if tab_merge_keys:
+                            extra_cur = [c for c in sel_current if c not in tab_merge_keys]
+                            extra_oth = [c for c in sel_other if c not in tab_merge_keys]
+                            st.caption(
+                                f"Result will have: **{', '.join(tab_merge_keys)}** (keys)"
+                                + (f" + **{', '.join(extra_cur)}** (current)" if extra_cur else "")
+                                + (f" + **{', '.join(extra_oth)}** (uploaded)" if extra_oth else "")
+                            )
 
-    with tab7:
-        manip_remove, manip_convert = st.tabs(["Remove Rows", "Convert Types"])
-
-        with manip_remove:
-            st.caption("Remove all rows where a variable equals a specific value")
-
-            manip_col = st.selectbox("Select variable", df.columns.tolist(), key="manip_col")
-
-            if manip_col:
-                unique_vals = df[manip_col].dropna().unique().tolist()
-                manip_value = st.text_input(
-                    f"Remove rows where **{manip_col}** equals:",
-                    key="manip_value",
-                    help=f"Column has {len(unique_vals)} unique values. Examples: {', '.join(str(v) for v in unique_vals[:5])}",
-                )
-
-                if manip_value:
-                    col_dtype = df[manip_col].dtype
-                    try:
-                        typed_value = col_dtype.type(manip_value)
-                    except (ValueError, TypeError):
-                        typed_value = manip_value
-                    mask = (df[manip_col] == manip_value) | (df[manip_col] == typed_value)
-                    match_count = mask.sum()
-
-                    st.caption(f"**{match_count:,}** rows match (out of {len(df):,})")
-
-                    if match_count > 0 and st.button("Remove matching rows", type="primary", key="manip_apply"):
-                        st.session_state.df = df[~mask].reset_index(drop=True)
-                        st.rerun()
-
-        with manip_convert:
-            st.caption("Convert column data types (e.g. object → int, float → int)")
-
-            # Show current types
-            type_info = pd.DataFrame({
-                "Column": df.columns,
-                "Current Type": [str(df[c].dtype) for c in df.columns],
-                "Sample Value": [str(df[c].dropna().iloc[0]) if df[c].notna().any() else "N/A" for c in df.columns],
-            })
-            st.dataframe(type_info, use_container_width=True, hide_index=True)
-
-            conv_col = st.selectbox("Column to convert", df.columns.tolist(), key="conv_col")
-
-            if conv_col:
-                st.caption(f"**{conv_col}** is currently `{df[conv_col].dtype}`")
-                target_type = st.selectbox(
-                    "Convert to",
-                    ["int", "float", "str"],
-                    key="conv_target",
-                )
-
-                # Preview conversion
-                errors_option = "coerce" if target_type in ["int", "float"] else None
-                try:
-                    if target_type == "int":
-                        preview = pd.to_numeric(df[conv_col], errors="coerce")
-                        failed = preview.isna().sum() - df[conv_col].isna().sum()
-                        preview = preview.astype("Int64")
-                    elif target_type == "float":
-                        preview = pd.to_numeric(df[conv_col], errors="coerce")
-                        failed = preview.isna().sum() - df[conv_col].isna().sum()
+                            if st.button("Merge datasets", type="primary", key="merge_tab_btn"):
+                                with st.spinner("Merging datasets..."):
+                                    df_current = df[sel_current].copy()
+                                    df_other = load_csv(merge_upload, merge_upload.name, merge_upload.size)[sel_other]
+                                    for k in tab_merge_keys:
+                                        df_current[k] = df_current[k].astype(str)
+                                        df_other[k] = df_other[k].astype(str)
+                                    merged = pd.merge(df_current, df_other, on=tab_merge_keys, how="inner")
+                                    st.session_state.df = merged
+                                    st.session_state.filename = "merged_dataset.csv"
+                                    st.session_state.encoded_cols = None
+                                    st.session_state.data_modified = True
+                                    st.rerun(scope="app")
                     else:
-                        preview = df[conv_col].astype(str)
-                        failed = 0
+                        st.warning("No shared columns between your selections \u2014 select at least one common column to use as a merge key.")
 
-                    if failed > 0:
-                        st.warning(f"**{failed:,}** values can't be converted and will become NaN")
-                        # Show the unconvertible values
-                        failed_mask = pd.to_numeric(df[conv_col], errors="coerce").isna() & df[conv_col].notna()
-                        failed_values = df.loc[failed_mask, conv_col].unique()
-                        st.caption(
-                            f"Values that can't be parsed as {target_type}: "
-                            + ", ".join(f"`{v}`" for v in failed_values[:10])
-                            + (f" ... and {len(failed_values) - 10} more" if len(failed_values) > 10 else "")
-                        )
+        with tab7:
+            manip_remove, manip_convert = st.tabs(["Remove Rows", "Convert Types"])
 
-                    if st.button("Convert", type="primary", key="conv_apply"):
-                        st.session_state.df[conv_col] = preview
-                        st.rerun()
-                except Exception as e:
-                    st.error(f"Conversion failed: {e}")
+            with manip_remove:
+                st.caption("Remove all rows where a variable equals a specific value")
+
+                manip_col = st.selectbox("Select variable", df.columns.tolist(), key="manip_col")
+
+                if manip_col:
+                    unique_vals = df[manip_col].dropna().unique().tolist()
+                    manip_value = st.text_input(
+                        f"Remove rows where **{manip_col}** equals:",
+                        key="manip_value",
+                        help=f"Column has {len(unique_vals)} unique values. Examples: {', '.join(str(v) for v in unique_vals[:5])}",
+                    )
+
+                    if manip_value:
+                        col_dtype = df[manip_col].dtype
+                        try:
+                            typed_value = col_dtype.type(manip_value)
+                        except (ValueError, TypeError):
+                            typed_value = manip_value
+                        mask = (df[manip_col] == manip_value) | (df[manip_col] == typed_value)
+                        match_count = mask.sum()
+
+                        st.caption(f"**{match_count:,}** rows match (out of {len(df):,})")
+
+                        if match_count > 0 and st.button("Remove matching rows", type="primary", key="manip_apply"):
+                            st.session_state.df = df[~mask].reset_index(drop=True)
+                            st.rerun(scope="app")
+
+            with manip_convert:
+                st.caption("Convert column data types (e.g. object \u2192 int, float \u2192 int)")
+
+                # Show current types
+                st.dataframe(cached_type_info(df), use_container_width=True, hide_index=True)
+
+                conv_col = st.selectbox("Column to convert", df.columns.tolist(), key="conv_col")
+
+                if conv_col:
+                    st.caption(f"**{conv_col}** is currently `{df[conv_col].dtype}`")
+                    target_type = st.selectbox(
+                        "Convert to",
+                        ["int", "float", "str"],
+                        key="conv_target",
+                    )
+
+                    # Preview conversion
+                    errors_option = "coerce" if target_type in ["int", "float"] else None
+                    try:
+                        if target_type == "int":
+                            preview = pd.to_numeric(df[conv_col], errors="coerce")
+                            failed = preview.isna().sum() - df[conv_col].isna().sum()
+                            preview = preview.astype("Int64")
+                        elif target_type == "float":
+                            preview = pd.to_numeric(df[conv_col], errors="coerce")
+                            failed = preview.isna().sum() - df[conv_col].isna().sum()
+                        else:
+                            preview = df[conv_col].astype(str)
+                            failed = 0
+
+                        if failed > 0:
+                            st.warning(f"**{failed:,}** values can't be converted and will become NaN")
+                            # Show the unconvertible values
+                            failed_mask = pd.to_numeric(df[conv_col], errors="coerce").isna() & df[conv_col].notna()
+                            failed_values = df.loc[failed_mask, conv_col].unique()
+                            st.caption(
+                                f"Values that can't be parsed as {target_type}: "
+                                + ", ".join(f"`{v}`" for v in failed_values[:10])
+                                + (f" ... and {len(failed_values) - 10} more" if len(failed_values) > 10 else "")
+                            )
+
+                        if st.button("Convert", type="primary", key="conv_apply"):
+                            st.session_state.df[conv_col] = preview
+                            st.rerun(scope="app")
+                    except Exception as e:
+                        st.error(f"Conversion failed: {e}")
+
+    data_tabs_fragment()
 
     # Chart configuration in sidebar
     st.sidebar.header("Chart Configuration")
